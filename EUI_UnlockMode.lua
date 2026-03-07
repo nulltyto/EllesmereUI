@@ -3801,15 +3801,15 @@ local function CreateHUD(parent)
             return btn
         end
 
-        -- Minus button (left side of banner)
-        minusBtn = MakeScaleBtn("\226\128\147", "LEFT", hudFrame, "TOPLEFT", 10, iconCenterY)
+        -- Minus button (10px right of the Exit button)
+        minusBtn = MakeScaleBtn("\226\128\147", "LEFT", exitBtn, "RIGHT", 10, 0)
         minusBtn:SetScript("OnClick", function(self)
             if self._isDisabled then return end
             ApplyBannerScale(bannerUserScale - SCALE_STEP)
         end)
 
-        -- Plus button (right side of banner)
-        plusBtn = MakeScaleBtn("+", "RIGHT", hudFrame, "TOPRIGHT", -10, iconCenterY)
+        -- Plus button (10px left of the Save & Exit button)
+        plusBtn = MakeScaleBtn("+", "RIGHT", hudFrame._saveBtn, "LEFT", -10, 0)
         plusBtn:SetScript("OnClick", function(self)
             if self._isDisabled then return end
             ApplyBannerScale(bannerUserScale + SCALE_STEP)

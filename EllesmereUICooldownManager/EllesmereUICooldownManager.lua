@@ -2002,20 +2002,19 @@ HideBlizzardCDM = function()
     for _, frameName in pairs(BLIZZ_CDM_FRAMES) do
         local frame = _G[frameName]
         if frame then
-            -- Make invisible but keep functional so children still report
-            -- IsShown() correctly and cooldowns keep ticking.
-            -- We move it off-screen and set alpha to 0 instead of reparenting.
+            -- Always re-apply hide in case a cinematic or loading screen
+            -- restored the frame's position/alpha without clearing our flag.
             if not frame._ecmeHidden then
                 frame._ecmeOrigAlpha = frame:GetAlpha()
                 frame._ecmeOrigPoints = {}
                 for i = 1, frame:GetNumPoints() do
                     frame._ecmeOrigPoints[i] = { frame:GetPoint(i) }
                 end
-                frame:SetAlpha(0)
-                frame:ClearAllPoints()
-                frame:SetPoint("CENTER", UIParent, "CENTER", 0, 10000)
                 frame._ecmeHidden = true
             end
+            frame:SetAlpha(0)
+            frame:ClearAllPoints()
+            frame:SetPoint("CENTER", UIParent, "CENTER", 0, 10000)
         end
     end
 end
@@ -5215,6 +5214,9 @@ eventFrame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 eventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
 eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 eventFrame:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED")
+-- Cinematic/cutscene end: Blizzard restores hidden frames, so re-hide ours
+eventFrame:RegisterEvent("CINEMATIC_STOP")
+eventFrame:RegisterEvent("STOP_MOVIE")
 
 -- Debounce token for talent-change rebuilds: rapid talent clicks collapse
 -- into a single deferred rebuild rather than firing once per click.
@@ -5287,6 +5289,15 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, updateInfo)
         _cachedPlayerFrame = nil
         _cachedPlayerFrameRoster = 0
         C_Timer.After(0.2, function() BuildAllCDMBars() end)
+        return
+    end
+    if event == "CINEMATIC_STOP" or event == "STOP_MOVIE" then
+        -- Blizzard restores frame positions/alpha after cinematics end.
+        -- Re-hide immediately so the Blizzard CDM doesn't reappear.
+        local p = ECME.db and ECME.db.profile
+        if p and p.cdmBars and p.cdmBars.hideBlizzard then
+            C_Timer.After(0, function() HideBlizzardCDM() end)
+        end
         return
     end
     if event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" or event == "ZONE_CHANGED_NEW_AREA" then
