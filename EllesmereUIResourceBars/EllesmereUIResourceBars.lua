@@ -2708,6 +2708,19 @@ UpdateCastBar = function(dt)
                 castBarFrame._timerText:SetText("")
             end
         end
+        -- Safety net: if past end time, verify cast is still active
+        if now > castBarFrame._endTime then
+            if castBarFrame._casting and not UnitCastingInfo("player") then
+                OnCastStop()
+                return
+            elseif castBarFrame._empowering then
+                local _, _, _, _, _, _, _, _, empowering = UnitChannelInfo("player")
+                if not empowering then
+                    OnCastStop()
+                    return
+                end
+            end
+        end
     elseif castBarFrame._channeling then
         local progress = (castBarFrame._endTime - now) / (castBarFrame._endTime - castBarFrame._startTime)
         progress = min(max(progress, 0), 1)
@@ -2722,6 +2735,14 @@ UpdateCastBar = function(dt)
                 castBarFrame._timerText:SetText(format("%.1f", remaining))
             else
                 castBarFrame._timerText:SetText("")
+            end
+        end
+        -- Safety net: if past end time, verify channel is still active
+        if now > castBarFrame._endTime then
+            local name = UnitChannelInfo("player")
+            if not name then
+                OnCastStop()
+                return
             end
         end
     end
@@ -2837,29 +2858,21 @@ local function OnCastFailed(eventCastID)
 end
 
 -- Called for UNIT_SPELLCAST_CHANNEL_STOP.
+-- Also handles empowered casts (which are a type of channel).
 local function OnChannelStop(eventCastID)
     if not castBarFrame then return end
-    if not castBarFrame._channeling then return end
+    if not (castBarFrame._channeling or castBarFrame._empowering) then return end
     if not eventCastID or not castBarFrame._castID or eventCastID ~= castBarFrame._castID then return end
-    castBarFrame._channeling = false
-    castBarFrame._castID = nil
-    castBarFrame:Hide()
+    OnCastStop()
 end
 
 -- Called for UNIT_SPELLCAST_EMPOWER_STOP.
+-- Also handles the case where a channel stop was missed.
 local function OnEmpowerStop(eventCastID)
     if not castBarFrame then return end
-    if not castBarFrame._empowering then return end
+    if not (castBarFrame._empowering or castBarFrame._channeling) then return end
     if not eventCastID or not castBarFrame._castID or eventCastID ~= castBarFrame._castID then return end
-    castBarFrame._empowering = false
-    castBarFrame._castID = nil
-    if castBarFrame._pips then
-        for i = 1, #castBarFrame._pips do
-            castBarFrame._pips[i]:Hide()
-        end
-    end
-    castBarFrame._numStages = 0
-    castBarFrame:Hide()
+    OnCastStop()
 end
 
 OnCastStop = function()
