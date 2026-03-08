@@ -62,6 +62,7 @@ local defaults = {
     enemyInCombat = { r = 0.800, g = 0.137, b = 0.137 },
     tankHasAggro = { r = 0.05, g = 0.82, b = 0.62 },
     tankHasAggroEnabled = false,
+    tankHasAggroAll = false,
     tankLosingAggro = { r = 0.81, g = 0.72, b = 0.19 },
     tankNoAggro = { r = 1.00, g = 0.22, b = 0.17 },
     dpsNearAggro = { r = 0.81, g = 0.72, b = 0.19 },
@@ -2333,7 +2334,7 @@ local _inThreatContent = false
 local _isTankRole      = false
 
 local function RefreshThreatCache()
-    -- Zone: party/raid instances and delves (difficultyID 204) are threat-relevant
+    -- Zone: party/raid instances and delves are threat-relevant
     local _, instanceType, difficultyID = GetInstanceInfo()
     difficultyID = tonumber(difficultyID) or 0
     if difficultyID == 0
@@ -2341,7 +2342,7 @@ local function RefreshThreatCache()
         _inThreatContent = false
     else
         _inThreatContent = (instanceType == "party" or instanceType == "raid"
-                            or difficultyID == 204)  -- delve difficulty
+                            or difficultyID == 204 or difficultyID == 208)  -- delve difficulties
     end
     -- Role: cache so we don't recalculate on every nameplate update
     local role = UnitGroupRolesAssigned("player")
@@ -2479,6 +2480,18 @@ local function GetReactionColor(unit)
                     -- Another tank has aggro -- fall through, no warning color
                 end
                 -- Tank has aggro falls through to be handled below focus/caster/miniboss
+            end
+        end
+    end
+    -- 3b. Tank has aggro on ALL enemies (elevated priority, overrides focus/miniboss/caster)
+    if isThreatUnit and _isTankRole and threatStatus >= 3 then
+        local aggroEnabled = defaults.tankHasAggroEnabled
+        if db.tankHasAggroEnabled ~= nil then aggroEnabled = db.tankHasAggroEnabled end
+        if aggroEnabled then
+            local allEnabled = defaults.tankHasAggroAll
+            if db.tankHasAggroAll ~= nil then allEnabled = db.tankHasAggroAll end
+            if allEnabled then
+                return db.tankHasAggro.r, db.tankHasAggro.g, db.tankHasAggro.b
             end
         end
     end

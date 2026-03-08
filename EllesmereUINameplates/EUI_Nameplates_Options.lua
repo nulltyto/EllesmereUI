@@ -5769,7 +5769,18 @@ initFrame:SetScript("OnEvent", function(self)
                 RefreshAllPlates()
                 EllesmereUI:RefreshPage()
               end },
-            { type="label", text="" });  y = y - h
+            { type="toggle", text="Apply \"Has Aggro\" Color to All Enemies",
+              tooltip="When enabled, the Has Aggro color applies to all enemies including casters and mini-bosses.",
+              getValue=function()
+                local db = DB()
+                if db and db.tankHasAggroAll ~= nil then return db.tankHasAggroAll end
+                return defaults.tankHasAggroAll
+              end,
+              setValue=function(v)
+                DB().tankHasAggroAll = v
+                RefreshAllPlates()
+              end,
+              disabled=isTankHasAggroDisabled });  y = y - h
 
         -- Inline Tank Has Aggro color swatch next to toggle
         do

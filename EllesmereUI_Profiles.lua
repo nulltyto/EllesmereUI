@@ -997,6 +997,7 @@ function EllesmereUI._RandomizeNameplates(db)
     -- Colors
     db.focusColorEnabled = true
     db.tankHasAggroEnabled = true
+    db.tankHasAggroAll = false
     db.focus = rColor()
     db.caster = rColor()
     db.miniboss = rColor()
