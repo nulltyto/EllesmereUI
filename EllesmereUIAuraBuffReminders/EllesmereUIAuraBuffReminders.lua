@@ -452,12 +452,12 @@ local function AnyGroupMemberMissingBuff(spellIDs)
     if IsInRaid() then
         for i = 1, GetNumGroupMembers() do
             local u = "raid"..i
-            if _unitOk(u) and not UnitIsUnit(u, "player") and not _unitHasBuff(u, spellIDs) then return true end
+            if _unitOk(u) and UnitIsPlayer(u) and not UnitIsUnit(u, "player") and not _unitHasBuff(u, spellIDs) then return true end
         end
     else
         for i = 1, GetNumSubgroupMembers() do
             local u = "party"..i
-            if _unitOk(u) and not _unitHasBuff(u, spellIDs) then return true end
+            if _unitOk(u) and UnitIsPlayer(u) and not _unitHasBuff(u, spellIDs) then return true end
         end
     end
     return false
