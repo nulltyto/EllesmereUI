@@ -909,6 +909,7 @@ local defaults = {
             textYOffset = -5,
             iconSpacing = 14,
             opacity = 1.0,
+            frameStrata = "MEDIUM",
             cursorAttach = false,
         },
         raidBuffs = {
@@ -1003,11 +1004,15 @@ local cursorAnchor
 local cursorIconPool = {}
 local cursorActiveIcons = {}
 
+local function GetStrata()
+    return db and db.profile.display.frameStrata or "MEDIUM"
+end
+
 local function GetOrCreateCombatIcon(index)
     if combatIconPool[index] then return combatIconPool[index] end
     local f = CreateFrame("Frame", "EABR_CombatIcon"..index, combatAnchor)
     f:SetSize(ICON_SIZE, ICON_SIZE)
-    f:SetFrameStrata("HIGH")
+    f:SetFrameStrata(GetStrata())
     f:SetFrameLevel(120)
     f:Hide()
     local icon = f:CreateTexture(nil, "ARTWORK")
@@ -1201,7 +1206,7 @@ local function GetOrCreateIcon(index)
     btn:SetSize(ICON_SIZE, ICON_SIZE)
     btn:RegisterForClicks("LeftButtonDown", "LeftButtonUp", "MiddleButtonUp")
     btn:SetPassThroughButtons("RightButton")
-    btn:SetFrameStrata("HIGH")
+    btn:SetFrameStrata(GetStrata())
     btn:Hide()
 
     -- Middle-click dismiss: hide this reminder until the next loading screen
@@ -1237,7 +1242,7 @@ local function GetOrCreateTalentIcon(index)
     btn:SetSize(ICON_SIZE, ICON_SIZE)
     btn:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
     btn:SetPassThroughButtons("RightButton", "MiddleButton")
-    btn:SetFrameStrata("HIGH")
+    btn:SetFrameStrata(GetStrata())
     btn:Hide()
     local icon = btn:CreateTexture(nil, "ARTWORK")
     icon:SetAllPoints(); icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
@@ -2135,10 +2140,22 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2)
         _G._EABR_WEAPON_ENCHANT_CHOICES = WEAPON_ENCHANT_CHOICES
         _G._EABR_TALENT_REMINDER_ZONES = TALENT_REMINDER_ZONES
 
+        local STRATA_VALUES = {
+            BACKGROUND = "Background", LOW = "Low", MEDIUM = "Medium",
+            HIGH = "High", DIALOG = "Dialog", FULLSCREEN = "Fullscreen",
+            FULLSCREEN_DIALOG = "Fullscreen Dialog", TOOLTIP = "Tooltip",
+        }
+        local STRATA_ORDER = {
+            "BACKGROUND", "LOW", "MEDIUM", "HIGH", "DIALOG",
+            "FULLSCREEN", "FULLSCREEN_DIALOG", "TOOLTIP",
+        }
+        _G._EABR_STRATA_VALUES = STRATA_VALUES
+        _G._EABR_STRATA_ORDER = STRATA_ORDER
+
         -- Create anchor
         iconAnchor = CreateFrame("Frame", "EABR_Anchor", UIParent)
         iconAnchor:SetSize(1, 1)
-        iconAnchor:SetFrameStrata("HIGH")
+        iconAnchor:SetFrameStrata(GetStrata())
         iconAnchor:EnableMouse(false)
         ApplyUnlockPos()
 
@@ -2146,7 +2163,7 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2)
         -- Parented to UIParent so Show/Hide is never blocked by combat lockdown.
         combatAnchor = CreateFrame("Frame", "EABR_CombatAnchor", UIParent)
         combatAnchor:SetSize(1, 1)
-        combatAnchor:SetFrameStrata("HIGH")
+        combatAnchor:SetFrameStrata(GetStrata())
         combatAnchor:SetFrameLevel(110)
         combatAnchor:EnableMouse(false)
         combatAnchor:SetAllPoints(iconAnchor)
@@ -2168,10 +2185,21 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2)
         -- Create talent reminder anchor (offset below main anchor)
         talentIconAnchor = CreateFrame("Frame", "EABR_TalentAnchor", iconAnchor)
         talentIconAnchor:SetSize(1, 1)
-        talentIconAnchor:SetFrameStrata("HIGH")
+        talentIconAnchor:SetFrameStrata(GetStrata())
         talentIconAnchor:EnableMouse(false)
         talentIconAnchor:SetPoint("CENTER", iconAnchor, "CENTER", 0, db.profile.talentReminderYOffset or -50)
         talentIconAnchor:Hide()
+
+        local function ApplyStrata()
+            local strata = GetStrata()
+            iconAnchor:SetFrameStrata(strata)
+            combatAnchor:SetFrameStrata(strata)
+            talentIconAnchor:SetFrameStrata(strata)
+            for _, btn in pairs(iconPool) do btn:SetFrameStrata(strata) end
+            for _, btn in pairs(talentIconPool) do btn:SetFrameStrata(strata) end
+            for _, f in pairs(combatIconPool) do f:SetFrameStrata(strata) end
+        end
+        _G._EABR_ApplyStrata = ApplyStrata
 
         -- Hook EUI panel show/hide
         if EllesmereUI then
