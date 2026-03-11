@@ -3091,7 +3091,13 @@ local function StyleSimpleFrame(frame, unit)
     health.colorDisconnected = true
     health._euiUnitKey = UnitToSettingsKey(unit)
 
+    local donor = GetMiniDonorSettings()
+    local unitKey = UnitToSettingsKey(unit)
+    local s = db.profile[unitKey]
+    local origTex = s.healthBarTexture
+    s.healthBarTexture = donor.healthBarTexture
     ApplyHealthBarTexture(health, UnitToSettingsKey(unit))
+    s.healthBarTexture = origTex
     ApplyHealthBarAlpha(health, UnitToSettingsKey(unit))
     ApplyDarkTheme(health)
 
@@ -3223,7 +3229,13 @@ local function StylePetFrame(frame, unit)
     health.colorDisconnected = true
     health._euiUnitKey = UnitToSettingsKey(unit)
 
+    local donor = GetMiniDonorSettings()
+    local unitKey = UnitToSettingsKey(unit)
+    local s = db.profile[unitKey]
+    local origTex = s.healthBarTexture
+    s.healthBarTexture = donor.healthBarTexture
     ApplyHealthBarTexture(health, UnitToSettingsKey(unit))
+    s.healthBarTexture = origTex
     ApplyHealthBarAlpha(health, UnitToSettingsKey(unit))
     ApplyDarkTheme(health)
 
