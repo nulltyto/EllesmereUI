@@ -2724,9 +2724,9 @@ initFrame:SetScript("OnEvent", function(self)
         -- Recached on PLAYER_SPECIALIZATION_CHANGED.
         local MELEE_SPELL_BY_SPEC = {
             -- Death Knight (all melee)
-            [250]  = 47528,   -- Blood:         Mind Freeze
-            [251]  = 47528,   -- Frost:         Mind Freeze
-            [252]  = 47528,   -- Unholy:        Mind Freeze
+            [250]  = 49998,   -- Blood:         Death Strike
+            [251]  = 49998,   -- Frost:         Death Strike
+            [252]  = 49998,   -- Unholy:        Death Strike
             -- Demon Hunter (all melee)
             [577]  = 162794,  -- Havoc:         Chaos Strike
             [581]  = 263642,  -- Vengeance:     Fracture
@@ -5140,66 +5140,3 @@ initFrame:SetScript("OnEvent", function(self)
         end,
     })
 end)
-
--------------------------------------------------------------------------------
---  /scanrange — temporary item range scanner (remove when done)
---
---  Usage: target a unit, stand at a known distance, type /scanrange
---  Items showing IN have a range >= your current distance.
---  Items showing OUT have a range < your current distance.
---  Compare results at different distances to determine each item's range.
---
---  Optional: /scanrange 50000 100000  (scan a specific ID range)
--------------------------------------------------------------------------------
-SLASH_EUISCANRANGE1 = "/scanrange"
-SlashCmdList["EUISCANRANGE"] = function(msg)
-    if not UnitExists("target") then
-        print("|cff0CD29DEllesmereUI:|r Need a target for range scanning.")
-        return
-    end
-
-    local args = {}
-    for w in msg:gmatch("%S+") do args[#args + 1] = tonumber(w) end
-    local startID = args[1] or 1
-    local endID   = args[2] or 200000
-    local PER_FRAME = 100
-
-    local isEnemy = UnitCanAttack("player", "target")
-    local mode = isEnemy and "HOSTILE" or "FRIENDLY"
-    print("|cff0CD29DEllesmereUI:|r Scanning items " .. startID .. "-" .. endID .. " (" .. mode .. ")...")
-
-    local found = {}
-    local i = startID
-    local total = endID - startID + 1
-    local nextReport = startID + math.floor(total * 0.1)
-    local reportStep = math.floor(total * 0.1)
-    local f = CreateFrame("Frame")
-    f:SetScript("OnUpdate", function()
-        local count = 0
-        while i <= endID and count < PER_FRAME do
-            local ok, hasRange = pcall(C_Item.ItemHasRange, i)
-            if ok and hasRange then
-                local ok2, inRange = pcall(C_Item.IsItemInRange, i, "target")
-                if ok2 and inRange ~= nil then
-                    found[#found + 1] = { id = i, inRange = inRange }
-                end
-            end
-            i = i + 1
-            count = count + 1
-        end
-        if i >= nextReport and i <= endID then
-            local pct = math.floor((i - startID) / total * 100)
-            print("|cff0CD29DEllesmereUI:|r " .. pct .. "% — scanned to " .. i .. " (" .. #found .. " found so far)")
-            nextReport = nextReport + reportStep
-        end
-        if i > endID then
-            f:SetScript("OnUpdate", nil)
-            print("|cff0CD29DEllesmereUI:|r Scan complete — " .. #found .. " items with range data")
-            for _, item in ipairs(found) do
-                local tag = item.inRange and "|cff00ff00IN |r" or "|cffff0000OUT|r"
-                local name = C_Item.GetItemNameByID(item.id) or "?"
-                print("  " .. tag .. " " .. item.id .. " — " .. name)
-            end
-        end
-    end)
-end
