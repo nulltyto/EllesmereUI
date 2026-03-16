@@ -10,7 +10,7 @@
 --    neither the player nor another addon has touched it.  If the value
 --    differs from the Blizzard default in any way, we leave it alone.
 --    Widgets always read the live CVar value so they stay in sync
---    regardless of who set it.
+--    regardless of who set it
 -------------------------------------------------------------------------------
 local ADDON_NAME = ...
 
@@ -76,7 +76,6 @@ initFrame:SetScript("OnEvent", function(self)
     --  EUI preferred defaults — only applied when CVar == Blizzard default
     --
     --  { cvarName, euiPreferred }
-    --  For the "hide pet/periodic" group we set three CVars to "0" (hidden).
     ---------------------------------------------------------------------------
     local EUI_DEFAULTS = {
         { "cameraDistanceMaxZoomFactor",                    "2.6" },
@@ -84,7 +83,6 @@ initFrame:SetScript("OnEvent", function(self)
         { "SpellQueueWindow",                               "300" },
         { "floatingCombatTextCombatHealing_v2",             "1"   },
         { "WorldTextScale_v2",                              "0.5" },
-        { "floatingCombatTextCombatLogPeriodicSpells_v2",   "0"   },
         { "floatingCombatTextCombatDamage_v2",              "1"   },
     }
 
@@ -225,7 +223,7 @@ initFrame:SetScript("OnEvent", function(self)
             local dragStartY, dragStartScroll
 
             local function UpdateThumb()
-                local maxScroll = tonumber(sf:GetVerticalScrollRange()) or 0
+                local maxScroll = EllesmereUI.SafeScrollRange(sf)
                 if maxScroll <= 0 then scrollTrack:Hide(); return end
                 scrollTrack:Show()
                 local trackH = scrollTrack:GetHeight()
@@ -240,7 +238,7 @@ initFrame:SetScript("OnEvent", function(self)
 
             smoothFrame:SetScript("OnUpdate", function(_, elapsed)
                 local cur = sf:GetVerticalScroll()
-                local maxScroll = tonumber(sf:GetVerticalScrollRange()) or 0
+                local maxScroll = EllesmereUI.SafeScrollRange(sf)
                 scrollTarget = math.max(0, math.min(maxScroll, scrollTarget))
                 local diff = scrollTarget - cur
                 if math.abs(diff) < 0.3 then
@@ -257,7 +255,7 @@ initFrame:SetScript("OnEvent", function(self)
             end)
 
             local function SmoothScrollTo(target)
-                local maxScroll = tonumber(sf:GetVerticalScrollRange()) or 0
+                local maxScroll = EllesmereUI.SafeScrollRange(sf)
                 scrollTarget = math.max(0, math.min(maxScroll, target))
                 if not isSmoothing then
                     isSmoothing = true
@@ -266,7 +264,7 @@ initFrame:SetScript("OnEvent", function(self)
             end
 
             sf:SetScript("OnMouseWheel", function(self, delta)
-                local maxScroll = tonumber(self:GetVerticalScrollRange()) or 0
+                local maxScroll = EllesmereUI.SafeScrollRange(self)
                 if maxScroll <= 0 then return end
                 local base = isSmoothing and scrollTarget or self:GetVerticalScroll()
                 SmoothScrollTo(base - delta * SCROLL_STEP)
@@ -296,7 +294,7 @@ initFrame:SetScript("OnEvent", function(self)
                     local trackH = scrollTrack:GetHeight()
                     local maxTravel = trackH - self2:GetHeight()
                     if maxTravel <= 0 then return end
-                    local maxScroll = tonumber(sf:GetVerticalScrollRange()) or 0
+                    local maxScroll = EllesmereUI.SafeScrollRange(sf)
                     local newScroll = math.max(0, math.min(maxScroll, dragStartScroll + (deltaY / maxTravel) * maxScroll))
                     scrollTarget = newScroll
                     sf:SetVerticalScroll(newScroll)
@@ -2720,7 +2718,7 @@ initFrame:SetScript("OnEvent", function(self)
 
         ---- Melee spell for indicator (accounts for hitbox, unlike items) --
         -- Keyed by spec ID (GetSpecializationInfo).  One spell per melee
-        -- spec; ranged specs are absent → indicator hides automatically.
+        -- spec; ranged specs are absent -- indicator hides automatically.
         -- Recached on PLAYER_SPECIALIZATION_CHANGED.
         local MELEE_SPELL_BY_SPEC = {
             -- Death Knight (all melee)
@@ -2857,13 +2855,25 @@ initFrame:SetScript("OnEvent", function(self)
             local showDist  = EllesmereUIDB and EllesmereUIDB.showDistanceText
             local showMelee = EllesmereUIDB and EllesmereUIDB.showMeleeIndicator
 
+            -- Early out: nothing to do
+            if not showDist and not showMelee then
+                if distFrame  then distFrame:Hide()  end
+                if meleeFrame then meleeFrame:Hide() end
+                return
+            end
+
             if not UnitExists("target") then
                 if distFrame  then distFrame:Hide()  end
                 if meleeFrame then meleeFrame:Hide() end
                 return
             end
 
-            local minRange, maxRange = GetRangeEstimate("target")
+            -- Only run the expensive item-based range scan when distance
+            -- text is enabled.  The melee indicator uses spell range only.
+            local minRange, maxRange
+            if showDist then
+                minRange, maxRange = GetRangeEstimate("target")
+            end
 
             -- Snap to 5-yard increments for cleaner display
             local dispMin = minRange and (floor(minRange / 5) * 5) or nil
@@ -2893,6 +2903,8 @@ initFrame:SetScript("OnEvent", function(self)
                 local th = distText:GetStringHeight() + 4
                 distFrame:SetSize(max(tw, 40), max(th, 20))
                 distFrame:Show()
+            elseif distFrame then
+                distFrame:Hide()
             end
 
             -- Melee indicator (combat-only, melee specs only)
@@ -2902,16 +2914,15 @@ initFrame:SetScript("OnEvent", function(self)
                 else
                     local meleeResult = CheckMeleeRange("target")
                     if meleeResult == nil then
-                        -- No usable melee spell (ranged spec/form): hide
                         meleeFrame:Hide()
                     elseif meleeResult then
-                        -- In melee range: hide indicator
                         meleeFrame:Hide()
                     else
-                        -- Out of melee range: show indicator
                         meleeFrame:Show()
                     end
                 end
+            elseif meleeFrame then
+                meleeFrame:Hide()
             end
         end
 
@@ -3067,7 +3078,7 @@ initFrame:SetScript("OnEvent", function(self)
         end)
     end
 
-    -- Register Distance Text as an unlock mode element
+    -- Register Distance Text and Melee Indicator as unlock mode elements
     C_Timer.After(1.5, function()
         if not EllesmereUI or not EllesmereUI.RegisterUnlockElements then return end
         EllesmereUI:RegisterUnlockElements({
@@ -3115,13 +3126,6 @@ initFrame:SetScript("OnEvent", function(self)
                     end
                 end,
             },
-        })
-    end)
-
-    -- Register Melee Indicator as an unlock mode element
-    C_Timer.After(1.5, function()
-        if not EllesmereUI or not EllesmereUI.RegisterUnlockElements then return end
-        EllesmereUI:RegisterUnlockElements({
             {
                 key = "EUI_MeleeIndicator",
                 label = "Melee Indicator",
