@@ -22,6 +22,13 @@ local partyKeys = {}  -- [playerName] = { dungeon = mapID, keyLevel = N, rating 
 -- Dungeon mapID -> teleport spellID
 -- mapIDs here match what C_ChallengeMode returns and what keystone links store.
 -- Built dynamically from C_ChallengeMode.GetMapTable + spell lookup.
+-- Short dungeon labels for the Portals tab grid (keyed by spell ID).
+-- Matches abbreviations used in EllesmereUIChat's portal flyout for consistency.
+local SHORT_BY_SPELL = {
+    [1254400] = "WRS", [1254572] = "MT",  [1254563] = "NPX", [1254559] = "MC",
+    [159898]  = "SR",  [1254555] = "PoS", [1254551] = "SoT", [393273]  = "AA",
+}
+
 local MAP_TELEPORT_SPELLS = {}
 do
     -- Spell IDs indexed by dungeon name (case-insensitive matching)
@@ -48,6 +55,110 @@ do
         end
     end
 end
+
+-------------------------------------------------------------------------------
+--  Teleport icon state painter (shared by Keys row icons + Portals grid)
+-------------------------------------------------------------------------------
+-- btn must be an InsecureActionButtonTemplate frame with:
+--   btn.icon       (Texture, ARTWORK)
+--   btn.cooldown   (CooldownFrameTemplate frame)
+-- spellID may be nil (renders a grey placeholder, button disabled)
+local FALLBACK_ICON = 134400  -- Blizzard "?" texture
+local function ApplyIconState(btn, spellID, dungeonName)
+    btn._spellID = spellID
+    btn._dungeonName = dungeonName
+    if not spellID then
+        btn.icon:SetTexture(FALLBACK_ICON)
+        btn.icon:SetDesaturated(true)
+        btn.cooldown:Hide()
+        btn:SetAttribute("spell", nil)
+        btn:EnableMouse(false)
+        return
+    end
+    local tex = C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(spellID)
+    btn.icon:SetTexture(tex or FALLBACK_ICON)
+    btn:SetAttribute("spell", spellID)
+    btn:EnableMouse(true)
+
+    local known = IsPlayerSpell and IsPlayerSpell(spellID)
+    local cdInfo = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(spellID)
+    local onCD = cdInfo and cdInfo.duration and cdInfo.duration > 1.5  -- ignore GCD
+
+    if not known then
+        btn.icon:SetDesaturated(true)
+        btn.cooldown:Hide()
+    elseif onCD then
+        btn.icon:SetDesaturated(true)
+        btn.cooldown:SetCooldown(cdInfo.startTime, cdInfo.duration)
+        btn.cooldown:Show()
+    else
+        btn.icon:SetDesaturated(false)
+        btn.cooldown:Hide()
+    end
+end
+
+-- Creates a button shell with .icon and .cooldown that ApplyIconState can paint.
+-- size = pixel square size of the button.
+-- parent = parent frame.
+local function MakeTeleportButton(parent, size)
+    local btn = CreateFrame("Button", nil, parent, "InsecureActionButtonTemplate")
+    btn:SetSize(size, size)
+    btn:RegisterForClicks("AnyUp", "AnyDown")
+    btn:SetAttribute("type", "spell")
+
+    btn.icon = btn:CreateTexture(nil, "ARTWORK")
+    btn.icon:SetAllPoints()
+    btn.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)  -- trim default Blizzard icon border
+
+    local _PP = EllesmereUI and EllesmereUI.PP
+    if _PP and _PP.CreateBorder then
+        _PP.CreateBorder(btn, 0, 0, 0, 1, 1, "OVERLAY", 7)
+    end
+
+    btn.cooldown = CreateFrame("Cooldown", nil, btn, "CooldownFrameTemplate")
+    btn.cooldown:SetAllPoints()
+    btn.cooldown:SetDrawEdge(false)
+    btn.cooldown:SetHideCountdownNumbers(false)
+
+    btn:SetScript("OnEnter", function(self)
+        if not self._spellID then return end
+        if EllesmereUI and EllesmereUI.ShowWidgetTooltip then
+            local name = self._dungeonName or ""
+            local known = IsPlayerSpell and IsPlayerSpell(self._spellID)
+            local label
+            if not known then
+                label = name ~= "" and (name .. "\nPortal not learned") or "Portal not learned"
+            else
+                local cd = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(self._spellID)
+                if cd and cd.startTime and cd.duration and cd.duration > 1.5 then
+                    local remain = math.max(0, (cd.startTime + cd.duration) - GetTime())
+                    local hours = math.floor(remain / 3600)
+                    local mins = math.floor((remain % 3600) / 60)
+                    local cdStr
+                    if hours > 0 then
+                        cdStr = string.format("%dh %dm", hours, mins)
+                    elseif mins > 0 then
+                        cdStr = string.format("%dm", mins)
+                    else
+                        cdStr = string.format("%ds", math.ceil(remain))
+                    end
+                    label = string.format("%s\nCooldown: %s", name, cdStr)
+                else
+                    label = name
+                end
+            end
+            EllesmereUI.ShowWidgetTooltip(self, label)
+        end
+    end)
+    btn:SetScript("OnLeave", function()
+        if EllesmereUI and EllesmereUI.HideWidgetTooltip then
+            EllesmereUI.HideWidgetTooltip()
+        end
+    end)
+
+    return btn
+end
+
 local guildKeys = {}  -- [playerName] = { dungeon = mapID, keyLevel = N, rating = N }
 local deferredBroadcast = false
 local deferredQuery     = false
@@ -227,6 +338,7 @@ local MAX_CONTENT_H = 300
 
 local popup, rowFrames
 local ShowKeystonePopup  -- forward declaration
+local GetActiveTab, SetActiveTab  -- forward declarations (referenced inside BuildPopup)
 
 local function ResolveFont()
     return (EUI and EUI.GetFontPath and EUI.GetFontPath()) or "Fonts\\FRIZQT__.TTF"
@@ -300,10 +412,43 @@ local function BuildPopup()
     xBtn:SetScript("OnLeave", function() xTex:SetAlpha(ICON_ALPHA) end)
     xBtn:SetScript("OnClick", function() popup:Hide() end)
 
+    -- Tab toggle button (Keys <-> Portals)
+    local tabBtn = CreateFrame("Button", nil, popup)
+    tabBtn:SetSize(ICON_SZ, ICON_SZ)
+    -- Position will be set after refBtn exists (see below)
+    local tabTex = tabBtn:CreateTexture(nil, "ARTWORK")
+    tabTex:SetAllPoints()
+    tabTex:SetTexture("Interface\\AddOns\\EllesmereUIChat\\Media\\chat_portal.png")
+    tabTex:SetAlpha(ICON_ALPHA)
+    tabBtn._refresh = function()
+        local tab = GetActiveTab()
+        tabBtn._tooltipLabel = (tab == "portals") and "Show Keystones" or "M+ Portals"
+    end
+    tabBtn:SetScript("OnEnter", function()
+        tabTex:SetAlpha(1)
+        if EllesmereUI and EllesmereUI.ShowWidgetTooltip then
+            EllesmereUI.ShowWidgetTooltip(tabBtn, tabBtn._tooltipLabel or "M+ Portals")
+        end
+    end)
+    tabBtn:SetScript("OnLeave", function()
+        tabTex:SetAlpha(ICON_ALPHA)
+        if EllesmereUI and EllesmereUI.HideWidgetTooltip then
+            EllesmereUI.HideWidgetTooltip()
+        end
+    end)
+    tabBtn:SetScript("OnClick", function()
+        local cur = GetActiveTab()
+        SetActiveTab(cur == "portals" and "keys" or "portals")
+        ShowKeystonePopup()
+    end)
+    popup._tabToggleBtn = tabBtn
+    tabBtn._refresh()
+
     -- Refresh button
     local refBtn = CreateFrame("Button", nil, popup)
     refBtn:SetSize(ICON_SZ, ICON_SZ)
     refBtn:SetPoint("RIGHT", xBtn, "LEFT", -6, 0)
+    tabBtn:SetPoint("RIGHT", refBtn, "LEFT", -6, 0)
     local refTex = refBtn:CreateTexture(nil, "ARTWORK")
     refTex:SetAllPoints()
     refTex:SetTexture("Interface\\AddOns\\EllesmereUI\\media\\icons\\unlock-reset.png")
@@ -379,36 +524,13 @@ local function AcquireRow(i)
     r._ratingFS:SetPoint("LEFT", r._nameFS, "RIGHT", 4, 0); r._ratingFS:SetWidth(40); r._ratingFS:SetJustifyH("LEFT")
 
     r._dungeonFS = MakeLabel(r, 11, nil, 0.7, 0.7, 0.7, 1)
-    r._dungeonFS:SetPoint("LEFT", r._ratingFS, "RIGHT", 4, 0); r._dungeonFS:SetWidth(130); r._dungeonFS:SetJustifyH("LEFT")
+    r._dungeonFS:SetPoint("LEFT", r._ratingFS, "RIGHT", 4, 0); r._dungeonFS:SetWidth(108); r._dungeonFS:SetJustifyH("LEFT")
     r._dungeonFS:SetWordWrap(false)
 
-    -- Teleport button overlaying the dungeon name
-    local tpBtn = CreateFrame("Button", nil, r, "InsecureActionButtonTemplate")
-    tpBtn:SetPoint("TOPLEFT", r._dungeonFS, "TOPLEFT", 0, 0)
-    tpBtn:SetPoint("BOTTOMLEFT", r._dungeonFS, "BOTTOMLEFT", 0, 0)
-    tpBtn:SetWidth(130)
+    -- Inline teleport icon (between dungeon name and level)
+    local tpBtn = MakeTeleportButton(r, 16)
+    tpBtn:SetPoint("LEFT", r._dungeonFS, "RIGHT", 4, 0)
     tpBtn:SetFrameLevel(r:GetFrameLevel() + 5)
-    tpBtn:RegisterForClicks("AnyUp", "AnyDown")
-    tpBtn:SetAttribute("type", "spell")
-    local EG = EllesmereUI.ELLESMERE_GREEN
-    tpBtn:SetScript("OnEnter", function()
-        local sid = tpBtn._spellID
-        if not sid then return end
-        local known = IsPlayerSpell(sid)
-        if known then
-            if EG then r._dungeonFS:SetTextColor(EG.r, EG.g, EG.b, 1) end
-            local cdInfo = C_Spell.GetSpellCooldown(sid)
-            if cdInfo and cdInfo.duration and cdInfo.duration > 0 then
-                if EllesmereUI.ShowWidgetTooltip then
-                    EllesmereUI.ShowWidgetTooltip(tpBtn, "Portal on Cooldown")
-                end
-            end
-        end
-    end)
-    tpBtn:SetScript("OnLeave", function()
-        r._dungeonFS:SetTextColor(0.7, 0.7, 0.7, 1)
-        if EllesmereUI.HideWidgetTooltip then EllesmereUI.HideWidgetTooltip() end
-    end)
     tpBtn:Hide()
     r._tpBtn = tpBtn
 
@@ -425,6 +547,37 @@ local function AcquireRow(i)
     rowFrames[i] = r
     return r
 end
+
+-- Portal cell pool (Portals tab)
+local portalCells = {}
+local PORTAL_ICON_SIZE = 40
+local PORTAL_GAP = 6
+local PORTAL_LABEL_H = 14  -- single-line abbreviation height
+local PORTAL_COLS = 4
+
+local function AcquirePortalCell(i)
+    if portalCells[i] then return portalCells[i] end
+    local p = BuildPopup()
+    local cell = CreateFrame("Frame", nil, p._body)
+    cell:SetSize(PORTAL_ICON_SIZE, PORTAL_ICON_SIZE + PORTAL_LABEL_H)
+
+    cell._btn = MakeTeleportButton(cell, PORTAL_ICON_SIZE)
+    cell._btn:SetPoint("TOP", cell, "TOP", 0, 0)
+
+    cell._label = MakeLabel(cell, 9, nil, 0.85, 0.85, 0.85, 1)
+    cell._label:SetPoint("TOP", cell._btn, "BOTTOM", 0, -2)
+    cell._label:SetWidth(PORTAL_ICON_SIZE + 12)  -- slight overflow OK; cells are spaced
+    cell._label:SetJustifyH("CENTER")
+    cell._label:SetWordWrap(true)
+    cell._label:SetIndentedWordWrap(false)  -- center each wrapped line independently
+    cell._label:SetMaxLines(1)
+
+    portalCells[i] = cell
+    return cell
+end
+
+-- One-shot warning for missing portal mappings (so we can backfill on new seasons)
+local warnedMissingPortals = false
 
 -- Section header pool
 local secHeaders = {}
@@ -443,6 +596,19 @@ end
 local function GetTextSize()
     local cfg = EllesmereUIDB and EllesmereUIDB.keystonePopup
     return cfg and cfg.textSize or 11
+end
+
+GetActiveTab = function()
+    local cfg = EllesmereUIDB and EllesmereUIDB.keystonePopup
+    local t = cfg and cfg.activeTab
+    if t == "portals" then return "portals" end
+    return "keys"
+end
+
+SetActiveTab = function(tab)
+    EllesmereUIDB = EllesmereUIDB or {}
+    EllesmereUIDB.keystonePopup = EllesmereUIDB.keystonePopup or {}
+    EllesmereUIDB.keystonePopup.activeTab = (tab == "portals") and "portals" or "keys"
 end
 
 local function ApplyRowFontSize(r)
@@ -472,26 +638,25 @@ local function PopulateRow(r, e)
         elseif e.lvl >= 7 then    r._levelFS:SetTextColor(0, 0.44, 0.87, 1)
         elseif e.lvl >= 4 then    r._levelFS:SetTextColor(0.12, 1, 0, 1)
         else                      r._levelFS:SetTextColor(1, 1, 1, 1) end
-        -- Teleport button
+        -- Teleport icon (between dungeon name and level)
         local spellID = e.mapID and MAP_TELEPORT_SPELLS[e.mapID]
         if spellID and r._tpBtn then
-            r._tpBtn._spellID = spellID
-            r._tpBtn:SetAttribute("spell", spellID)
+            ApplyIconState(r._tpBtn, spellID, e.dungeonName)
             r._tpBtn:Show()
+            r._dungeonFS:SetWidth(108)
         elseif r._tpBtn then
-            r._tpBtn._spellID = nil
             r._tpBtn:Hide()
+            r._dungeonFS:SetWidth(130)  -- no icon: dungeon name reclaims the space
         end
     else
         r._dungeonFS:SetText("No keystone"); r._dungeonFS:SetTextColor(0.5, 0.5, 0.5, 0.7)
         r._levelFS:SetText("")
         if r._tpBtn then r._tpBtn:Hide() end
+        r._dungeonFS:SetWidth(130)
     end
 end
 
-ShowKeystonePopup = function()
-    RecordOwnKey()
-    local p = BuildPopup()
+local function RenderKeysBody(p)
     local body = p._body
     local contentW = POPUP_W - PAD * 2
 
@@ -532,9 +697,10 @@ ShowKeystonePopup = function()
         return a.name < b.name
     end)
 
-    -- Hide all pooled frames
+    -- Hide all pooled frames (including Portals-tab cells so they don't bleed)
     for i = 1, #rowFrames do rowFrames[i]:Hide() end
     for i = 1, #secHeaders do secHeaders[i]:Hide() end
+    for i = 1, #portalCells do portalCells[i]:Hide() end
 
     local curY = 0
     local rowIdx = 0
@@ -556,6 +722,7 @@ ShowKeystonePopup = function()
         r._nameFS:SetText("No keystones found"); r._nameFS:SetWidth(contentW)
         r._nameFS:SetTextColor(0.5, 0.5, 0.5, 0.7)
         r._ratingFS:SetText(""); r._dungeonFS:SetText(""); r._levelFS:SetText("")
+        if r._tpBtn then r._tpBtn:Hide() end
         r:ClearAllPoints()
         r:SetPoint("TOPLEFT", body, "TOPLEFT", 0, curY)
         r:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, curY)
@@ -592,6 +759,7 @@ ShowKeystonePopup = function()
         r._nameFS:SetText("Waiting for data..."); r._nameFS:SetWidth(contentW)
         r._nameFS:SetTextColor(0.5, 0.5, 0.5, 0.5)
         r._ratingFS:SetText(""); r._dungeonFS:SetText(""); r._levelFS:SetText("")
+        if r._tpBtn then r._tpBtn:Hide() end
         r:ClearAllPoints()
         r:SetPoint("TOPLEFT", body, "TOPLEFT", 0, curY)
         r:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, curY)
@@ -611,13 +779,86 @@ ShowKeystonePopup = function()
         curY = curY + ROW_GAP
     end
 
-    -- Set scroll child height
-    local totalH = math.abs(curY)
-    body:SetHeight(totalH)
+    return math.abs(curY)
+end
 
-    -- Size popup: content capped at MAX_CONTENT_H, scrollable beyond that
+local function RenderPortalsBody(p)
+    local body = p._body
+    local contentW = POPUP_W - PAD * 2
+
+    -- Hide Keys-tab pooled frames so they don't bleed into the Portals layout
+    for i = 1, #rowFrames do rowFrames[i]:Hide() end
+    for i = 1, #secHeaders do secHeaders[i]:Hide() end
+
+    local maps = (C_ChallengeMode and C_ChallengeMode.GetMapTable and C_ChallengeMode.GetMapTable()) or {}
+    if not maps or #maps == 0 then
+        -- No data yet (e.g. very early). Show all cached cells hidden.
+        for i = 1, #portalCells do portalCells[i]:Hide() end
+        return PORTAL_ICON_SIZE + PORTAL_LABEL_H
+    end
+
+    table.sort(maps)  -- stable order across reloads
+
+    local cellW = (contentW - (PORTAL_COLS - 1) * PORTAL_GAP) / PORTAL_COLS
+    local cellH = PORTAL_ICON_SIZE + PORTAL_LABEL_H
+
+    -- Hide any cells beyond the count we need
+    for i = 1, #portalCells do portalCells[i]:Hide() end
+
+    local missing = {}
+    for i, mapID in ipairs(maps) do
+        local cell = AcquirePortalCell(i)
+        local col = (i - 1) % PORTAL_COLS
+        local row = math.floor((i - 1) / PORTAL_COLS)
+        local x = col * (cellW + PORTAL_GAP)
+        local y = -row * (cellH + PORTAL_GAP)
+        cell:ClearAllPoints()
+        cell:SetPoint("TOPLEFT", body, "TOPLEFT", x, y)
+        cell:SetWidth(cellW)
+        cell._label:SetWidth(cellW)
+
+        local name = DungeonNameFromMap(mapID) or ("Map " .. mapID)
+        local spellID = MAP_TELEPORT_SPELLS[mapID]
+        local labelText = (spellID and SHORT_BY_SPELL[spellID]) or name
+        cell._label:SetText(labelText)
+        ApplyIconState(cell._btn, spellID, name)
+        if not spellID then missing[#missing + 1] = mapID end
+
+        cell:Show()
+    end
+
+    if #missing > 0 and not warnedMissingPortals then
+        warnedMissingPortals = true
+        if EllesmereUI and EllesmereUI.Print then
+            EllesmereUI.Print(string.format(
+                "|cffffd000[EUI Keys]|r Missing portal spell mapping for mapID(s): %s",
+                table.concat(missing, ", ")))
+        end
+    end
+
+    local rows = math.ceil(#maps / PORTAL_COLS)
+    local totalH = rows * cellH + (rows - 1) * PORTAL_GAP
+    return totalH
+end
+
+ShowKeystonePopup = function()
+    RecordOwnKey()
+    local p = BuildPopup()
+    local totalH
+    if GetActiveTab() == "portals" then
+        totalH = RenderPortalsBody(p)
+    else
+        totalH = RenderKeysBody(p)
+    end
+
+    p._body:SetHeight(totalH)
     local visH = math.min(totalH, MAX_CONTENT_H)
     p:SetHeight(TITLE_H + 8 + visH + PAD)
+
+    -- Refresh toggle button visual state if it exists yet
+    if p._tabToggleBtn and p._tabToggleBtn._refresh then
+        p._tabToggleBtn._refresh()
+    end
 
     p:Show()
 end
