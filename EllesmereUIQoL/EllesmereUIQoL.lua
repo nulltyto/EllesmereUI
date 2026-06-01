@@ -436,6 +436,42 @@ qolFrame:SetScript("OnEvent", function(self)
     end
 
     ---------------------------------------------------------------------------
+    --  Crafting Current Expansion Only (Place Crafter Order window)
+    ---------------------------------------------------------------------------
+    do
+        local hooked = false
+        local function HookBrowseFilters()
+            if hooked then return end
+            local browse = ProfessionsCustomerOrdersFrame and ProfessionsCustomerOrdersFrame.BrowseOrders
+            if not browse or not browse.SetDefaultFilters then return end
+            hooked = true
+            -- SetDefaultFilters runs every time the window opens (via Init), resetting
+            -- the filter table; re-apply Current Expansion Only afterward when enabled.
+            hooksecurefunc(browse, "SetDefaultFilters", function(self)
+                if not (EllesmereUIDB and EllesmereUIDB.craftingCurrentExpansion) then return end
+                if not (Enum and Enum.AuctionHouseFilter and Enum.AuctionHouseFilter.CurrentExpansionOnly) then return end
+                local fd = self.SearchBar and self.SearchBar.FilterDropdown
+                if fd and fd.filters then
+                    fd.filters[Enum.AuctionHouseFilter.CurrentExpansionOnly] = true
+                end
+            end)
+        end
+
+        local coFrame = CreateFrame("Frame")
+        coFrame:RegisterEvent("ADDON_LOADED")
+        coFrame:SetScript("OnEvent", function(self, event, addonName)
+            if addonName == "Blizzard_ProfessionsCustomerOrders" then
+                self:UnregisterEvent("ADDON_LOADED")
+                HookBrowseFilters()
+            end
+        end)
+
+        if C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("Blizzard_ProfessionsCustomerOrders") then
+            HookBrowseFilters()
+        end
+    end
+
+    ---------------------------------------------------------------------------
     --  Auto Sell Junk + Auto Repair
     ---------------------------------------------------------------------------
     local merchantFrame = CreateFrame("Frame", "EUI_MerchantHandler", UIParent)
