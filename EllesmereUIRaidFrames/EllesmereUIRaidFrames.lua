@@ -1179,8 +1179,11 @@ function ns._ApplyHealthBg(d, health, s, unit)
     if s.healthColorMode == "dark" then
         bg:SetColorTexture(DARK_BG_R, DARK_BG_G, DARK_BG_B, 1)
     else
-        local bgc = s.customBgColor
-        bg:SetColorTexture(bgc.r, bgc.g, bgc.b, (s.bgDarkness or 50) / 100)
+        -- Class-colored when bgClassColored is set, else the custom bg color.
+        -- GetBgColor returns r,g,b,a (a = bgDarkness) and is secret-safe; routing
+        -- through it keeps this live path in lockstep with the preview/reload
+        -- paths, which otherwise repaint custom color over the class tint.
+        bg:SetColorTexture(ns.GetBgColor(unit, s))
     end
 end
 
