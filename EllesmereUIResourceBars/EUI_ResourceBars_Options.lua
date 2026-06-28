@@ -7126,6 +7126,59 @@ initFrame:SetScript("OnEvent", function(self)
         _, h = W:Spacer(parent, y, 16);  y = y - h
 
         -----------------------------------------------------------------------
+        _sec, h = W:SectionHeader(parent, "SPELL QUEUE", y);  y = y - h
+
+        local queueOff = function() local p = DB(); return not p or not p.gcdBar.enabled or not p.gcdBar.queueWindow end
+        local tickOff  = function() local p = DB(); return not p or not p.gcdBar.enabled or not p.gcdBar.queueTick end
+
+        -- Row: Show Queue Window | Queue Color
+        _, h = W:DualRow(parent, y,
+            { type = "toggle", text = "Show Queue Window",
+              tooltip = "Highlight the end of the GCD where pressing your next spell queues it (the spell-queue window).",
+              disabled = gcdOff, disabledTooltip = "GCD Bar",
+              getValue = function() local p = DB(); return p and p.gcdBar.queueWindow end,
+              setValue = function(v) local p = DB(); if not p then return end; p.gcdBar.queueWindow = v; RefreshGCD(); EllesmereUI:RefreshPage() end },
+            { type = "multiSwatch", text = "Queue Color",
+              disabled = queueOff, disabledTooltip = "Show Queue Window",
+              swatches = {
+                  { tooltip = "Queue Window Color", hasAlpha = true,
+                    getValue = function() local p = DB(); if not p then return 1, 0.82, 0, 0.35 end; return p.gcdBar.queueR, p.gcdBar.queueG, p.gcdBar.queueB, p.gcdBar.queueA end,
+                    setValue = function(r, g, b, a) local p = DB(); if not p then return end; p.gcdBar.queueR, p.gcdBar.queueG, p.gcdBar.queueB, p.gcdBar.queueA = r, g, b, a; RefreshGCD() end },
+              } }
+        );  y = y - h
+
+        -- Row: Two-Color Bar | Show Queue Tick
+        _, h = W:DualRow(parent, y,
+            { type = "toggle", text = "Two-Color Bar",
+              tooltip = "Tint the queue-window slice of the fill itself with the Queue Color (opaque) instead of laying a translucent overlay on top. The fill changes color as it crosses into the queue window.",
+              disabled = queueOff, disabledTooltip = "Show Queue Window",
+              getValue = function() local p = DB(); return p and p.gcdBar.queueTwoTone end,
+              setValue = function(v) local p = DB(); if not p then return end; p.gcdBar.queueTwoTone = v; RefreshGCD() end },
+            { type = "toggle", text = "Show Queue Tick",
+              tooltip = "Draw a thin tick line at the spell-queue boundary, above the fill.",
+              disabled = gcdOff, disabledTooltip = "GCD Bar",
+              getValue = function() local p = DB(); return p and p.gcdBar.queueTick end,
+              setValue = function(v) local p = DB(); if not p then return end; p.gcdBar.queueTick = v; RefreshGCD(); EllesmereUI:RefreshPage() end }
+        );  y = y - h
+
+        -- Row: Tick Width | Tick Color
+        _, h = W:DualRow(parent, y,
+            { type = "slider", text = "Tick Width", min = 1, max = 8, step = 1,
+              disabled = tickOff, disabledTooltip = "Show Queue Tick",
+              getValue = function() local p = DB(); return p and (p.gcdBar.queueTickSize or 2) or 2 end,
+              setValue = function(v) local p = DB(); if not p then return end; p.gcdBar.queueTickSize = v; RefreshGCD() end },
+            { type = "multiSwatch", text = "Tick Color",
+              disabled = tickOff, disabledTooltip = "Show Queue Tick",
+              swatches = {
+                  { tooltip = "Queue Tick Color", hasAlpha = true,
+                    getValue = function() local p = DB(); if not p then return 1, 1, 1, 1 end; return p.gcdBar.queueTickR, p.gcdBar.queueTickG, p.gcdBar.queueTickB, p.gcdBar.queueTickA end,
+                    setValue = function(r, g, b, a) local p = DB(); if not p then return end; p.gcdBar.queueTickR, p.gcdBar.queueTickG, p.gcdBar.queueTickB, p.gcdBar.queueTickA = r, g, b, a; RefreshGCD() end },
+              } }
+        );  y = y - h
+
+        _, h = W:Spacer(parent, y, 16);  y = y - h
+
+        -----------------------------------------------------------------------
         _sec, h = W:SectionHeader(parent, "DISPLAY", y);  y = y - h
 
         -- Row: Border Style | Border Size (+ inline color swatch + offset cog)
@@ -7314,6 +7367,20 @@ initFrame:SetScript("OnEvent", function(self)
               disabled = gcdOff, disabledTooltip = "GCD Bar",
               getValue = function() local p = DB(); return p and p.gcdBar.showSpark end,
               setValue = function(v) local p = DB(); if not p then return end; p.gcdBar.showSpark = v; RefreshGCD() end }
+        );  y = y - h
+
+        -- Row: Smooth Fill
+        _, h = W:DualRow(parent, y,
+            { type = "toggle", text = "Smooth Fill",
+              tooltip = "Ease the fill animation. When off, the fill tracks the true GCD position exactly, so it lines up with the queue window marker. On by default.",
+              disabled = gcdOff, disabledTooltip = "GCD Bar",
+              getValue = function() local p = DB(); return p and p.gcdBar.smoothFill ~= false end,
+              setValue = function(v) local p = DB(); if not p then return end; p.gcdBar.smoothFill = v; RefreshGCD() end },
+            { type = "toggle", text = "Reverse Fill",
+              tooltip = "Start the bar full and empty it as the GCD elapses, instead of filling from empty. The queue window marker and spark follow the draining edge.",
+              disabled = gcdOff, disabledTooltip = "GCD Bar",
+              getValue = function() local p = DB(); return p and p.gcdBar.depleteFill end,
+              setValue = function(v) local p = DB(); if not p then return end; p.gcdBar.depleteFill = v; RefreshGCD() end }
         );  y = y - h
 
         return math.abs(y)

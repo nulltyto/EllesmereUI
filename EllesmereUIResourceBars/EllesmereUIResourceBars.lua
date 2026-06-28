@@ -896,6 +896,8 @@ local DEFAULTS = {
             gradientDir   = "HORIZONTAL",  -- "HORIZONTAL","VERTICAL"
             texture       = "none",
             showSpark     = false,
+            smoothFill    = true,   -- eased fill; off = fill tracks the true GCD position 1:1
+            depleteFill   = false,  -- start full and drain over the GCD instead of filling from empty
             borderSize    = 1,
             borderR       = 0, borderG = 0, borderB = 0, borderA = 1,
             borderTexture = "solid",
@@ -904,6 +906,15 @@ local DEFAULTS = {
             instanceOnly  = false,
             instantOnly   = false,
             alwaysShow    = false,
+            -- Spell-queue-window zone: highlights the final stretch of the GCD
+            -- where pressing the next spell queues it.
+            queueWindow        = false,
+            queueTwoTone       = false, -- tint the queue region of the fill itself instead of a translucent overlay
+            queueR = 1, queueG = 0.82, queueB = 0.0, queueA = 0.35,
+            -- Boundary tick: a thin line at the queue-window edge, drawn above the fill.
+            queueTick          = false,
+            queueTickSize      = 2,
+            queueTickR = 1, queueTickG = 1, queueTickB = 1, queueTickA = 1,
             unlockPos     = nil,
         },
         totemBar = {
@@ -960,6 +971,7 @@ local UpdateCastBar
 local BuildCastBar
 local UpdateGCDBar
 local BuildGCDBar
+local LayoutGCDQueueVisuals, HideGCDQueueVisuals
 local OnCastStart, OnChannelStart, OnChannelUpdate, OnCastStop, OnEmpowerStart, OnEmpowerUpdate
 local ShowChannelTicks, HideChannelTicks
 
@@ -5581,10 +5593,9 @@ BuildGCDBar = function()
     if not g.enabled then
         if gcdBarFrame then
             EllesmereUI.SetElementVisibility(gcdBarFrame, false)
-            gcdBarFrame:UnregisterAllEvents()
             gcdBarFrame._gcdStart = nil
             gcdBarFrame._gcdDur = nil
-            gcdBarFrame._gcdActualStart = nil
+            gcdBarFrame._gcdShownStart = nil
         end
         return
     end
@@ -5629,77 +5640,38 @@ BuildGCDBar = function()
         spark:SetBlendMode("ADD")
         gcdBarFrame._spark = spark
 
-        -- Event-driven GCD capture (like the cursor GCD ring)
-        gcdBarFrame:SetScript("OnEvent", function(self, event, unit, castGUID)
-            if unit ~= "player" then return end
-            local gc = ERB.db.profile.gcdBar
-            if not gc or not gc.enabled then return end
+        -- Spell-queue-window zone: drawn above the fill (sparkFrame sits above the
+        -- bar), below the spark. Positioned per-window in UpdateGCDBar because its
+        -- size depends on the live GCD duration.
+        local qzone = sparkFrame:CreateTexture(nil, "OVERLAY", nil, 0)
+        qzone:Hide()
+        gcdBarFrame._queueZone = qzone
 
-            local getCD = C_Spell and C_Spell.GetSpellCooldown
+        -- Two-colour queue fill: a clone of the main fill tinted with the queue
+        -- colour, clipped to the queue-window region so the second colour shows
+        -- only there (an alternative to the translucent overlay). It mirrors the
+        -- main bar's value/orientation each frame; the clip is sized per-window.
+        local queueClip = CreateFrame("Frame", nil, clipFrame)
+        queueClip:SetClipsChildren(true)
+        queueClip:SetFrameLevel(bar:GetFrameLevel() + 1)
+        queueClip:Hide()
+        gcdBarFrame._queueClip = queueClip
+        local queueBar = CreateFrame("StatusBar", nil, queueClip)
+        queueBar:SetMinMaxValues(0, 1)
+        queueBar:SetValue(0)
+        gcdBarFrame._queueBar = queueBar
 
-            -- Stop events: clear the bar the moment the GCD is no longer active.
-            if event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_INTERRUPTED"
-               or event == "UNIT_SPELLCAST_STOP" then
-                local cd = getCD and getCD(61304)
-                local stillActive = false
-                if cd and cd.startTime then
-                    local ok, act = pcall(function()
-                        local d, s = cd.duration, cd.startTime
-                        return (d and d > 0 and d <= 1.6 and s and s > 0) and true or false
-                    end)
-                    stillActive = ok and act
-                end
-                if not stillActive then
-                    self._gcdStart = nil
-                    self._gcdDur = nil
-                    self._gcdActualStart = nil
-                end
-                return
-            end
+        -- Boundary tick: a thin line at the queue-window edge, drawn above the
+        -- fill (sublevel 2 -> above the zone and spark). Sized per-window.
+        local qtick = sparkFrame:CreateTexture(nil, "OVERLAY", nil, 2)
+        qtick:Hide()
+        gcdBarFrame._queueTick = qtick
 
-            if event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_CHANNEL_START"
-               or event == "UNIT_SPELLCAST_EMPOWER_START" then
-                self._hardCastGUID = castGUID  -- remember this cast had a cast time
-                if gc.instantOnly then return end  -- instant-only: don't fill for hard casts
-            elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
-                -- instant-only: skip the SUCCEEDED that ends a hard cast (same GUID)
-                if gc.instantOnly and castGUID == self._hardCastGUID then return end
-            else
-                return
-            end
-
-            local cd = getCD and getCD(61304)
-            if not cd or not cd.startTime then return end
-            local ok, elapsed, dur = pcall(function()
-                local d, s = cd.duration, cd.startTime
-                if d and d > 0 and d <= 1.6 and s and s > 0 then return GetTime() - s, d end
-                return nil
-            end)
-            if ok and elapsed and not (issecretvalue and (issecretvalue(elapsed) or issecretvalue(dur))) then
-                local actualStart = GetTime() - elapsed
-                -- Only (re)start for a freshly started GCD (elapsed near 0).
-                -- This stops an off-GCD / succeeded spell from restarting the
-                -- running GCD.
-                if elapsed < 0.3 and ((not self._gcdActualStart) or actualStart > (self._gcdActualStart + 0.05)) then
-                    self._gcdActualStart = actualStart
-                    -- Fill starts visually at 0 fills over the time remaining
-                    -- (Using the true start would open the bar at the
-                    -- already-elapsed %, e.g. ~30% on a hasted GCD.)
-                    self._gcdStart = GetTime()
-                    self._gcdDur = math.max(dur - elapsed, 0.05)
-                end
-            end
-        end)
+        -- GCD detection is per-frame in UpdateGCDBar, which polls the GCD probe
+        -- (spell 61304) directly -- the robust approach the cursor GCD ring and
+        -- Blizzard action-bar swipes use. No events / OnEvent handler needed, so
+        -- spam, queued casts and late events can't desync it.
     end
-
-    -- register the cast events that start a GCD.
-    gcdBarFrame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
-    gcdBarFrame:RegisterUnitEvent("UNIT_SPELLCAST_START", "player")
-    gcdBarFrame:RegisterUnitEvent("UNIT_SPELLCAST_FAILED", "player")
-    gcdBarFrame:RegisterUnitEvent("UNIT_SPELLCAST_INTERRUPTED", "player")
-    gcdBarFrame:RegisterUnitEvent("UNIT_SPELLCAST_STOP", "player")
-    gcdBarFrame:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_START", "player")
-    gcdBarFrame:RegisterUnitEvent("UNIT_SPELLCAST_EMPOWER_START", "player")
 
     -- Size (orientation swaps width/height for vertical) + position
     local ori = g.orientation or "HORIZONTAL"
@@ -5755,10 +5727,14 @@ BuildGCDBar = function()
     gcdBarFrame._bg:SetColorTexture(g.bgR, g.bgG, g.bgB, g.bgA)
 
     ApplyBarOrientation(bar, ori)
-    -- HORIZONTAL_LEFT = horizontal, but the fill grows right->left (reverse).
-    -- ApplyBarOrientation treats any non-vertical key as normal horizontal, so
-    -- flip reverse-fill here for the left variant.
-    if ori == "HORIZONTAL_LEFT" then bar:SetReverseFill(true) end
+    -- normalReverse = the fill anchor for filling-up mode. HORIZONTAL_LEFT and
+    -- VERTICAL_DOWN fill toward their business edge (left / bottom). Reverse Fill
+    -- (deplete) keeps that business edge -- the GCD-completion edge and queue
+    -- window -- fixed and only swaps full<->empty, which means flipping the fill
+    -- anchor (XOR), so the colour drains back toward the business edge.
+    local normalReverse = (ori == "HORIZONTAL_LEFT") or (ori == "VERTICAL_DOWN")
+    if g.depleteFill then normalReverse = not normalReverse end
+    bar:SetReverseFill(normalReverse)
 
     -- Fill color / gradient
     local fillTex = bar:GetStatusBarTexture()
@@ -5774,30 +5750,50 @@ BuildGCDBar = function()
         ApplyBarFlat(fillTex, fR, fG, fB, fA)
     end
 
+    -- Two-colour queue bar mirrors the main fill (same geometry / orientation /
+    -- anchor / texture) tinted with the queue colour; its clip frame restricts it
+    -- to the queue region. Opaque (the alpha swatch governs the overlay style).
+    -- Value is driven per-frame in UpdateGCDBar.
+    local queueBar = gcdBarFrame._queueBar
+    if queueBar then
+        queueBar:ClearAllPoints()
+        queueBar:SetAllPoints(bar)
+        queueBar:SetStatusBarTexture(texPath)
+        ApplyBarOrientation(queueBar, ori)
+        queueBar:SetReverseFill(normalReverse)
+        queueBar:SetStatusBarColor(g.queueR, g.queueG, g.queueB, 1)
+    end
+
     -- Leading-edge spark: anchored to the fill texture's moving edge so it tracks
     -- the fill. Edge depends on orientation (right / top / bottom for down-fill).
     local spark = gcdBarFrame._spark
     if spark then
         if g.showSpark then
             spark:ClearAllPoints()
-            if ori == "VERTICAL_UP" then
-                spark:SetSize(w, 8)
-                spark:SetPoint("CENTER", fillTex, "TOP", 0, 0)
-            elseif ori == "VERTICAL_DOWN" then
-                spark:SetSize(w, 8)
-                spark:SetPoint("CENTER", fillTex, "BOTTOM", 0, 0)
-            elseif ori == "HORIZONTAL_LEFT" then
-                spark:SetSize(8, h)
-                spark:SetPoint("CENTER", fillTex, "LEFT", 0, 0)
-            else
-                spark:SetSize(8, h)
-                spark:SetPoint("CENTER", fillTex, "RIGHT", 0, 0)
+            -- The spark rides the fill texture's moving (leading) edge -- the edge
+            -- opposite the fill anchor. Reverse Fill flips the anchor, so the
+            -- moving edge, and the spark, flips to the opposite edge with it.
+            local vertical = (ori == "VERTICAL_UP" or ori == "VERTICAL_DOWN")
+            local edge
+            if ori == "VERTICAL_UP" then edge = "TOP"
+            elseif ori == "VERTICAL_DOWN" then edge = "BOTTOM"
+            elseif ori == "HORIZONTAL_LEFT" then edge = "LEFT"
+            else edge = "RIGHT" end
+            if g.depleteFill then
+                edge = (edge == "TOP" and "BOTTOM") or (edge == "BOTTOM" and "TOP")
+                    or (edge == "LEFT" and "RIGHT") or "LEFT"
             end
+            if vertical then spark:SetSize(w, 8) else spark:SetSize(8, h) end
+            spark:SetPoint("CENTER", fillTex, edge, 0, 0)
             spark:Show()
         else
             spark:Hide()
         end
     end
+
+    -- Force the queue visuals to re-lay-out with the new config on the next frame.
+    gcdBarFrame._qzStamp = nil
+    HideGCDQueueVisuals()
 
     -- Visibility
     gcdBarFrame:Show()
@@ -5810,6 +5806,122 @@ BuildGCDBar = function()
     end
 end
 
+-- Hide every spell-queue visual (overlay band, two-colour clip, boundary tick).
+HideGCDQueueVisuals = function()
+    local f = gcdBarFrame
+    if not f then return end
+    if f._queueZone then f._queueZone:Hide() end
+    if f._queueClip then f._queueClip:Hide() end
+    if f._queueTick then f._queueTick:Hide() end
+end
+
+-- Lay out the spell-queue visuals over the final `Q` seconds of the bar, at the
+-- GCD-completion (business) edge. `dur` is the bar's real-time span (the
+-- remaining GCD captured at start), so Q seconds = Q/dur of the visible bar.
+-- The completion edge is fixed by orientation; Reverse Fill never moves it.
+--   * overlay  -- a translucent band over the queue region
+--   * two-tone -- the queue region's clip; the queue bar fills it (value driven
+--                 per-frame in UpdateGCDBar), tinting that slice of the fill
+--   * tick     -- a thin line on the queue region's inner boundary
+LayoutGCDQueueVisuals = function(g, dur)
+    local zone  = gcdBarFrame and gcdBarFrame._queueZone
+    local qclip = gcdBarFrame and gcdBarFrame._queueClip
+    local tick  = gcdBarFrame and gcdBarFrame._queueTick
+    if not zone then return end
+
+    local twoTone = g.queueWindow and g.queueTwoTone
+    local overlay = g.queueWindow and not twoTone
+
+    if (not g.queueWindow and not g.queueTick) or not dur or dur <= 0 then
+        HideGCDQueueVisuals(); return
+    end
+
+    local clip = gcdBarFrame._barClip
+    local W, H = clip:GetWidth(), clip:GetHeight()
+    if not W or not H or W <= 0 or H <= 0 then HideGCDQueueVisuals(); return end
+
+    local getQ = C_Spell and C_Spell.GetSpellQueueWindow
+    local Q = ((getQ and getQ()) or 400) / 1000
+    local qFrac = Q / dur; if qFrac > 1 then qFrac = 1 end
+
+    -- Band rect (the queue region) + tick rect (its inner boundary line), as
+    -- offsets from the clip's BOTTOMLEFT. The band hugs the business edge.
+    local ori = g.orientation or "HORIZONTAL"
+    local ts  = g.queueTickSize or 2
+    local bL, bB, bW, bH      -- band
+    local tL, tB, tW, tH      -- tick
+    if ori == "VERTICAL_UP" then            -- business edge: top
+        bL, bB, bW, bH = 0, (1 - qFrac) * H, W, qFrac * H
+        tL, tB, tW, tH = 0, (1 - qFrac) * H - ts / 2, W, ts
+    elseif ori == "VERTICAL_DOWN" then      -- business edge: bottom
+        bL, bB, bW, bH = 0, 0, W, qFrac * H
+        tL, tB, tW, tH = 0, qFrac * H - ts / 2, W, ts
+    elseif ori == "HORIZONTAL_LEFT" then    -- business edge: left
+        bL, bB, bW, bH = 0, 0, qFrac * W, H
+        tL, tB, tW, tH = qFrac * W - ts / 2, 0, ts, H
+    else                                    -- HORIZONTAL; business edge: right
+        bL, bB, bW, bH = (1 - qFrac) * W, 0, qFrac * W, H
+        tL, tB, tW, tH = (1 - qFrac) * W - ts / 2, 0, ts, H
+    end
+
+    if overlay and bW > 0 and bH > 0 then
+        zone:ClearAllPoints()
+        zone:SetPoint("BOTTOMLEFT", clip, "BOTTOMLEFT", bL, bB)
+        zone:SetSize(bW, bH)
+        zone:SetColorTexture(g.queueR, g.queueG, g.queueB, g.queueA)
+        zone:Show()
+    else
+        zone:Hide()
+    end
+
+    if qclip then
+        if twoTone and bW > 0 and bH > 0 then
+            qclip:ClearAllPoints()
+            qclip:SetPoint("BOTTOMLEFT", clip, "BOTTOMLEFT", bL, bB)
+            qclip:SetSize(bW, bH)
+            qclip:Show()
+        else
+            qclip:Hide()
+        end
+    end
+
+    if tick then
+        if g.queueTick and tW > 0 and tH > 0 then
+            tick:ClearAllPoints()
+            tick:SetPoint("BOTTOMLEFT", clip, "BOTTOMLEFT", tL, tB)
+            tick:SetSize(tW, tH)
+            tick:SetColorTexture(g.queueTickR, g.queueTickG, g.queueTickB, g.queueTickA)
+            tick:Show()
+        else
+            tick:Hide()
+        end
+    end
+end
+
+-- pcall target, hoisted out of ReadGCDProbe so the per-frame poll doesn't
+-- allocate a fresh closure every frame. cd.duration/startTime may be secret;
+-- arithmetic on a secret value would error, hence the pcall in the caller.
+local function _GCDProbeArith(cd)
+    local d, st = cd.duration, cd.startTime
+    if d and d > 0 and d <= 1.6 and st and st > 0 then
+        local rate = (cd.modRate and cd.modRate > 0) and cd.modRate or 1
+        return st, d / rate
+    end
+    return nil
+end
+
+-- Read the GCD probe (spell 61304) safely. Returns (active, startTime, effDur),
+-- where effDur is the true hasted GCD (duration / modRate). Secret-value safe.
+local function ReadGCDProbe()
+    local getCD = C_Spell and C_Spell.GetSpellCooldown
+    local cd = getCD and getCD(61304)
+    if not cd or not cd.startTime then return false end
+    local ok, s, effDur = pcall(_GCDProbeArith, cd)
+    if not ok or not s or not effDur then return false end
+    if issecretvalue and (issecretvalue(s) or issecretvalue(effDur)) then return false end
+    return true, s, effDur
+end
+
 UpdateGCDBar = function(_dt)
     if not gcdBarFrame or not gcdBarFrame:IsShown() then return end
     local g = ERB.db.profile.gcdBar
@@ -5818,39 +5930,110 @@ UpdateGCDBar = function(_dt)
     -- Frame stays shown; visibility is via alpha to avoid the Hide->Show fill
     -- flash. (Re-showing a hidden StatusBar renders its fill full for a frame.)
     local bar = gcdBarFrame._bar
+    local now = GetTime()
 
-    if g.instanceOnly and not IsInInstance() then
+    -- Authoritative, per-frame: read the live GCD and (re)sync the visual window.
+    -- A new window is detected ONLY by the probe's startTime changing -- no event
+    -- gate, dedup anchor or stop-handler -- so spam / queued casts / late events
+    -- can't desync it (the robust approach the cursor ring & action swipes use).
+    local probeActive, s, effDur = ReadGCDProbe()
+
+    -- Contexts where the bar must stay hidden.
+    local instanceHide = g.instanceOnly and not IsInInstance()
+    local castHide = g.instantOnly and (UnitCastingInfo("player") or UnitChannelInfo("player"))
+    if castHide and probeActive then
+        -- instant-only: consume the hard cast's window so its tail doesn't pop
+        -- once the cast finishes; only a genuinely new GCD shows.
+        gcdBarFrame._gcdShownStart = s
+    end
+
+    if instanceHide or castHide then
+        gcdBarFrame._gcdStart = nil
+        gcdBarFrame._gcdDur = nil
+        if instanceHide then gcdBarFrame._gcdShownStart = nil end
         bar:SetValue(0)
+        HideGCDQueueVisuals()
+        gcdBarFrame._qzStamp = nil
         EllesmereUI.SetElementVisibility(gcdBarFrame, false)
         return
     end
 
-    -- Animate from the start/duration captured at the cast event (set in the
-    -- OnEvent handler). No per-frame cooldown polling.
-    local startT, dur = gcdBarFrame._gcdStart, gcdBarFrame._gcdDur
-    local active = startT and dur
-    local elapsed
-    if active then
-        elapsed = GetTime() - startT
-        if elapsed < 0 or elapsed >= dur then
-            gcdBarFrame._gcdStart = nil
-            gcdBarFrame._gcdDur = nil
-            gcdBarFrame._gcdActualStart = nil
-            active = false
+    if probeActive and (s + effDur) > now then
+        if (not gcdBarFrame._gcdShownStart)
+           or math.abs(s - gcdBarFrame._gcdShownStart) > 0.05 then
+            -- New GCD window: anchor the fill to now so it grows from 0 over the
+            -- remaining time (not at the already-elapsed %).
+            gcdBarFrame._gcdShownStart = s
+            gcdBarFrame._gcdStart = now
+            gcdBarFrame._gcdDur = math.max((s + effDur) - now, 0.05)
+            gcdBarFrame._qzStamp = nil
+            -- Snap the first frame: a depleting bar starts at full, so without
+            -- this the eased fill would visibly ramp 0->1 before draining.
+            gcdBarFrame._gcdSnap = true
+        elseif gcdBarFrame._gcdStart then
+            -- Same window, re-read: haste may have changed mid-flight (a proc), so
+            -- retarget the end to the current effective GCD end.
+            local nd = (s + effDur) - gcdBarFrame._gcdStart
+            if nd > 0.05 then gcdBarFrame._gcdDur = nd end
         end
+    end
+
+    -- Animate the visual window; it governs its own end on the local clock.
+    local startT, dur = gcdBarFrame._gcdStart, gcdBarFrame._gcdDur
+    local active, elapsed = false, nil
+    if startT and dur then
+        elapsed = now - startT
+        active = (elapsed >= 0 and elapsed < dur)
     end
 
     if not active then
         -- No GCD running: empty, and invisible unless Always Show is on.
+        gcdBarFrame._gcdStart = nil
+        gcdBarFrame._gcdDur = nil
+        -- Keep the consumed window's start while the GCD probe is still active
+        -- (e.g. instant-only after a sub-GCD hard cast ends) so its leftover tail
+        -- isn't re-detected as a new window and popped onto the bar.
+        if not probeActive then gcdBarFrame._gcdShownStart = nil end
         bar:SetValue(0)
-        local visible = false
-        if g.alwaysShow then visible = true end
+        local visible = g.alwaysShow and true or false
+        -- Idle preview: when shown but no GCD, lay the visuals out once over a
+        -- nominal 1.5s GCD so their colour/position can be configured. The main
+        -- bar is empty when idle, so fill the two-colour clip directly to preview
+        -- the queue tint.
+        if visible and (g.queueWindow or g.queueTick) then
+            if gcdBarFrame._qzStamp ~= "idle" then
+                gcdBarFrame._qzStamp = "idle"
+                LayoutGCDQueueVisuals(g, 1.5)
+            end
+            if gcdBarFrame._queueBar then
+                gcdBarFrame._queueBar:SetValue((g.queueWindow and g.queueTwoTone) and 1 or 0)
+            end
+        else
+            HideGCDQueueVisuals()
+            gcdBarFrame._qzStamp = nil
+        end
         EllesmereUI.SetElementVisibility(gcdBarFrame, visible)
         return
     end
 
     EllesmereUI.SetElementVisibility(gcdBarFrame, true)
-    bar:SetValue(elapsed / dur, bar._castInterp)
+    -- Lay the queue visuals out once per GCD window (their size depends on this
+    -- window's duration); keyed off the window's start time.
+    if gcdBarFrame._qzStamp ~= startT then
+        gcdBarFrame._qzStamp = startT
+        LayoutGCDQueueVisuals(g, dur)
+    end
+    -- Eased fill (smoothFill) trails the true position slightly; off = 1:1 so the
+    -- fill lines up exactly with the queue marker. Depleting fill starts full and
+    -- drains, so invert the progress.
+    local frac = elapsed / dur
+    if g.depleteFill then frac = 1 - frac end
+    local interp = (g.smoothFill ~= false) and bar._castInterp or nil
+    if gcdBarFrame._gcdSnap then interp = nil; gcdBarFrame._gcdSnap = nil end
+    bar:SetValue(frac, interp)
+    -- The two-colour queue bar mirrors the main fill; the clip restricts the tint
+    -- to the queue region.
+    if gcdBarFrame._queueBar then gcdBarFrame._queueBar:SetValue(frac, interp) end
 end
 
 -------------------------------------------------------------------------------
