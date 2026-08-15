@@ -6598,8 +6598,13 @@ end
         end
     end
 
-    -- Hide channel ticks when not channeling
+    -- Hide channel ticks when not channeling. A rebuild that lands DURING one
+    -- must put them back: only CHANNEL_START/CHANNEL_UPDATE draw them, so the
+    -- rest of the channel would run bare. Redrawing here would read a width the
+    -- size animation above has not finished writing, so mark it and let the
+    -- cast tick redraw once the layout settles.
     HideChannelTicks()
+    castBarFrame._ticksDirty = castBarFrame._channeling or nil
 
     -- Idle when not casting (empty bar with "Always Show", else hidden). Runs LAST
     -- on purpose: the idle state re-suppresses the spark and icon the style pass
@@ -6993,6 +6998,23 @@ UpdateCastBar = function(dt)
             OnCastStop()
             return
         end
+        -- Marks owed from a rebuild that ran mid-channel (see BuildCastBar).
+        -- Held until the size animation has finished and the channel reads
+        -- back: marks are positioned from bar width, so drawing against an
+        -- interpolated one pins them there for the rest of the channel, and
+        -- clearing the flag on a draw that did not happen leaves it bare --
+        -- the very bug this exists to fix. Both waits are bounded (0.18s of
+        -- animation; the flag dies with the cast in ShowIdleCastBar).
+        if castBarFrame._ticksDirty then
+            local anim = _barAnimTimers[castBarFrame]
+            if not (anim and (anim.w or anim.h)) then
+                local _, _, _, _, _, _, _, chanSpellID = UnitChannelInfo("player")
+                if chanSpellID and bar:GetWidth() > 0 and bar:GetHeight() > 0 then
+                    castBarFrame._ticksDirty = nil
+                    ShowChannelTicks(chanSpellID)
+                end
+            end
+        end
         if not (castBarFrame._nativeFill or castBarFrame._rawFill) then
             local chanDur = castBarFrame._endTime - castBarFrame._startTime
             -- Same lead as the cast branch, mirrored for the drain
@@ -7152,6 +7174,7 @@ function ns.ShowIdleCastBar()
         for i = 1, #castBarFrame._pips do castBarFrame._pips[i]:Hide() end
     end
     castBarFrame._numStages = 0
+    castBarFrame._ticksDirty = nil
     HideChannelTicks()
     HideLatencyOverlay()
     ns.ApplyCastBgAnchor()
