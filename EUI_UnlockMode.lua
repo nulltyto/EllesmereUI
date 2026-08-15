@@ -1257,9 +1257,23 @@ function MatchH.ApplyWidthMatch(sourceKey, targetKey)
                 local m = movers[sourceKey]
                 if m then m:SyncSize() end
             else
-                _propagatingMatch = true; EllesmereUI._propagatingMatch = true
-                pcall(sourceElem.setWidth, sourceKey, targetW)
-                _propagatingMatch = false; EllesmereUI._propagatingMatch = false
+                -- Already this wide: skip. setWidth is a full module rebuild
+                -- rather than a size write (ResourceBars runs ApplyAll from
+                -- it), and ScheduleSettleReapply re-applies every match on its
+                -- quiescence timer, so an unchanged match rebuilt three modules
+                -- mid-combat and took live cast bar state with it -- a channel
+                -- lost its tick marks for the rest of the cast. Same epsilon
+                -- the spec-override layer flush uses against the same setters.
+                local needsWrite = true
+                if sourceElem.getSize then
+                    local curW = sourceElem.getSize(sourceKey)
+                    needsWrite = not (curW and math.abs(curW - targetW) < 0.5)
+                end
+                if needsWrite then
+                    _propagatingMatch = true; EllesmereUI._propagatingMatch = true
+                    pcall(sourceElem.setWidth, sourceKey, targetW)
+                    _propagatingMatch = false; EllesmereUI._propagatingMatch = false
+                end
                 if sourceElem.loadPosition then
                     local pos = sourceElem.loadPosition(sourceKey)
                     if pos and pos.point == "CENTER" and pos.relPoint == "CENTER" then
@@ -1314,9 +1328,17 @@ function MatchH.ApplyHeightMatch(sourceKey, targetKey)
                 local m = movers[sourceKey]
                 if m then m:SyncSize() end
             else
-                _propagatingMatch = true; EllesmereUI._propagatingMatch = true
-                pcall(sourceElem.setHeight, sourceKey, targetH)
-                _propagatingMatch = false; EllesmereUI._propagatingMatch = false
+                -- Unchanged height, same reasoning as ApplyWidthMatch above.
+                local needsWrite = true
+                if sourceElem.getSize then
+                    local _, curH = sourceElem.getSize(sourceKey)
+                    needsWrite = not (curH and math.abs(curH - targetH) < 0.5)
+                end
+                if needsWrite then
+                    _propagatingMatch = true; EllesmereUI._propagatingMatch = true
+                    pcall(sourceElem.setHeight, sourceKey, targetH)
+                    _propagatingMatch = false; EllesmereUI._propagatingMatch = false
+                end
                 if sourceElem.loadPosition then
                     local pos = sourceElem.loadPosition(sourceKey)
                     if pos and pos.point == "CENTER" and pos.relPoint == "CENTER" then
